@@ -1,3 +1,6 @@
+import json
+import os
+import os.path as osp
 import numpy as np
 import logging
 from romav2.geometry import (
@@ -27,10 +30,12 @@ class Mega1500:
         ]
         self.data_root = data_root
 
-    def benchmark(self, model, model_name=None):
+    def benchmark(self, model, model_name=None, max_pairs=None, seed=0, output=None):
+        np.random.seed(seed)
         data_root = self.data_root
         tot_e_t, tot_e_R, tot_e_pose = [], [], []
         thresholds = [5, 10, 20]
+        num_pairs = 0
         for scene_ind in range(len(self.scenes)):
             scene = self.scenes[scene_ind]
             pairs = scene["pair_infos"]
@@ -39,6 +44,8 @@ class Mega1500:
             im_paths = scene["image_paths"]
             pair_inds = range(len(pairs))
             for pairind in (pbar := tqdm(pair_inds, desc="Mega1500 eval")):
+                if max_pairs is not None and num_pairs >= max_pairs:
+                    break
                 idx1, idx2 = pairs[pairind][0]
                 K1 = intrinsics[idx1].copy()
                 T1 = poses[idx1].copy()
@@ -94,6 +101,9 @@ class Mega1500:
                 pbar.set_postfix(
                     auc=f"{[f'{a.item():.3f}' for a in pose_auc(tot_e_pose, thresholds)]}"
                 )
+                num_pairs += 1
+            if max_pairs is not None and num_pairs >= max_pairs:
+                break
 
         tot_e_pose = np.array(tot_e_pose)
         auc = pose_auc(tot_e_pose, thresholds)
@@ -105,7 +115,7 @@ class Mega1500:
         map_10 = np.mean([acc_5, acc_10])
         map_20 = np.mean([acc_5, acc_10, acc_15, acc_20])
         logger.info("%s auc: %s", model_name, auc)
-        return {
+        results = {
             "auc_5": auc[0],
             "auc_10": auc[1],
             "auc_20": auc[2],
@@ -113,3 +123,8 @@ class Mega1500:
             "map_10": map_10,
             "map_20": map_20,
         }
+        if output is not None:
+            os.makedirs(osp.dirname(osp.abspath(output)), exist_ok=True)
+            with open(output, 'w') as f:
+                json.dump({k: float(v) for k, v in results.items()}, f, indent=2)
+        return results

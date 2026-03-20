@@ -1,6 +1,9 @@
+import json
+import os
 import os.path as osp
 import logging
 import numpy as np
+import torch
 from romav2.geometry import compute_pose_error, pose_auc, estimate_pose_cv2_ransac
 from PIL import Image
 from tqdm import tqdm
@@ -12,12 +15,18 @@ class ScanNet1500:
     def __init__(self, data_root="data/scannet/scans") -> None:
         self.data_root = data_root
 
-    def benchmark(self, model, model_name=None):
+    def benchmark(self, model, model_name=None, max_pairs=None, seed=0, output=None, dump_dir=None):
+        np.random.seed(seed)
+        if dump_dir is not None:
+            os.makedirs(dump_dir, exist_ok=True)
         model.train(False)
         thresholds = [5, 10, 20]
         data_root = self.data_root
         tmp = np.load(osp.join(data_root, "test.npz"))
         pairs, rel_pose = tmp["name"], tmp["rel_pose"]
+        if max_pairs is not None:
+            pairs = pairs[:max_pairs]
+            rel_pose = rel_pose[:max_pairs]
         tot_e_t, tot_e_R, tot_e_pose = [], [], []
         pair_inds = range(len(pairs))
         for pairind in (pbar := tqdm(pair_inds, smoothing=0.9)):
@@ -63,6 +72,16 @@ class ScanNet1500:
             w2, h2 = im_B.size
             preds = model.match(im_A_path, im_B_path)
             sparse_matches, _, _, _ = model.sample(preds, 5000)
+            if dump_dir is not None:
+                torch.save({
+                    'sparse_matches': sparse_matches.cpu(),
+                    'im_A': np.array(im_A),
+                    'im_B': np.array(im_B),
+                    'im_A_path': im_A_path,
+                    'im_B_path': im_B_path,
+                    'W_A': int(im_A.size[0]), 'H_A': int(im_A.size[1]),
+                    'W_B': int(im_B.size[0]), 'H_B': int(im_B.size[1]),
+                }, osp.join(dump_dir, f'{pairind:05d}.pt'))
             scale1 = 480 / min(w1, h1)
             scale2 = 480 / min(w2, h2)
             w1, h1 = scale1 * w1, scale1 * h1
@@ -115,7 +134,7 @@ class ScanNet1500:
         map_5 = acc_5
         map_10 = np.mean([acc_5, acc_10])
         map_20 = np.mean([acc_5, acc_10, acc_15, acc_20])
-        return {
+        results = {
             "auc_5": auc[0],
             "auc_10": auc[1],
             "auc_20": auc[2],
@@ -123,3 +142,8 @@ class ScanNet1500:
             "map_10": map_10,
             "map_20": map_20,
         }
+        if output is not None:
+            os.makedirs(osp.dirname(osp.abspath(output)), exist_ok=True)
+            with open(output, 'w') as f:
+                json.dump({k: float(v) for k, v in results.items()}, f, indent=2)
+        return results

@@ -2,6 +2,7 @@ import json
 import os
 import os.path as osp
 import numpy as np
+import torch
 import logging
 from romav2.geometry import (
     compute_pose_error,
@@ -30,8 +31,10 @@ class Mega1500:
         ]
         self.data_root = data_root
 
-    def benchmark(self, model, model_name=None, max_pairs=None, seed=0, output=None):
+    def benchmark(self, model, model_name=None, max_pairs=None, seed=0, output=None, dump_dir=None):
         np.random.seed(seed)
+        if dump_dir is not None:
+            os.makedirs(dump_dir, exist_ok=True)
         data_root = self.data_root
         tot_e_t, tot_e_R, tot_e_pose = [], [], []
         thresholds = [5, 10, 20]
@@ -61,6 +64,23 @@ class Mega1500:
                 w1, h1 = im_A.size
                 im_B = Image.open(im_B_path)
                 w2, h2 = im_B.size
+                if dump_dir is not None:
+                    cuda_rng_state = torch.cuda.get_rng_state() if torch.cuda.is_available() else None
+                    sparse_matches_dump, _, _, _ = model.sample(preds, 5_000)
+                    if torch.cuda.is_available():
+                        torch.cuda.set_rng_state(cuda_rng_state)
+                    bundle = {
+                        'sparse_matches': sparse_matches_dump.cpu(),
+                        'im_A': np.array(im_A),
+                        'im_B': np.array(im_B),
+                        'im_A_path': im_A_path,
+                        'im_B_path': im_B_path,
+                        'W_A': int(w1), 'H_A': int(h1),
+                        'W_B': int(w2), 'H_B': int(h2),
+                    }
+                    if cuda_rng_state is not None:
+                        bundle['cuda_rng_state'] = cuda_rng_state
+                    torch.save(bundle, osp.join(dump_dir, f'{num_pairs:05d}.pt'))
                 if True:  # Note: we keep this true as it was used in DKM/RoMa papers. There is very little difference compared to setting to False.
                     scale1 = 1200 / max(w1, h1)
                     scale2 = 1200 / max(w2, h2)
